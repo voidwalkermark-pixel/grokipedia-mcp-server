@@ -28,13 +28,13 @@ Requires **Python 3.11–3.13**. The server is installed straight from this GitH
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run it without a manual install:
 
 ```bash
-uvx --from git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.0 grokipedia-mcp-server --version
+uvx --from git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.1 grokipedia-mcp-server --version
 ```
 
 Or install it as a persistent tool (puts `grokipedia-mcp-server` on your PATH):
 
 ```bash
-uv tool install git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.0
+uv tool install git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.1
 ```
 
 ### Option B: pip in a virtual environment
@@ -43,7 +43,7 @@ uv tool install git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-serve
 
 ```bash
 python3 -m venv ~/.venvs/grokipedia-mcp
-~/.venvs/grokipedia-mcp/bin/pip install "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.0"
+~/.venvs/grokipedia-mcp/bin/pip install "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.1"
 ~/.venvs/grokipedia-mcp/bin/grokipedia-mcp-server --version
 ```
 
@@ -51,24 +51,33 @@ python3 -m venv ~/.venvs/grokipedia-mcp
 
 ```powershell
 py -3.13 -m venv "$env:USERPROFILE\.venvs\grokipedia-mcp"
-& "$env:USERPROFILE\.venvs\grokipedia-mcp\Scripts\pip.exe" install "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.0"
+& "$env:USERPROFILE\.venvs\grokipedia-mcp\Scripts\pip.exe" install "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.1"
 & "$env:USERPROFILE\.venvs\grokipedia-mcp\Scripts\grokipedia-mcp-server.exe" --version
 ```
 
+If the `py` launcher isn't installed, use `python -m venv ...` instead (check `python --version` is 3.11–3.13).
+
 `pip install git+...` needs [Git](https://git-scm.com/download/win) on PATH. Without Git, install from
 the release archive instead:
-`pip install https://github.com/voidwalkermark-pixel/grokipedia-mcp-server/archive/refs/tags/v0.1.0.zip`
+`pip install https://github.com/voidwalkermark-pixel/grokipedia-mcp-server/archive/refs/tags/v0.1.1.zip`
 
 ### Option C: reproducible install with hash-pinned dependencies
 
 ```bash
-git clone --branch v0.1.0 https://github.com/voidwalkermark-pixel/grokipedia-mcp-server
+git clone --branch v0.1.1 https://github.com/voidwalkermark-pixel/grokipedia-mcp-server
 cd grokipedia-mcp-server
 python -m venv .venv
 # Linux/macOS: .venv/bin/python   Windows: .venv\Scripts\python.exe
 .venv/bin/python -m pip install --require-hashes -r requirements.lock.txt
 .venv/bin/python -m pip install --no-deps .
 ```
+
+> **Windows note:** with Git for Windows 2.55, `git clone --branch vX.Y.Z ...` may print a warning like
+> `refs/tags/vX.Y.Z ... is not a commit!` for the annotated release tag. It is harmless (the clone
+> checks out the tagged commit; confirm with `git -C grokipedia-mcp-server describe --tags`), but Git
+> writes it to stderr, so PowerShell with `$ErrorActionPreference = 'Stop'` may treat it as a failure.
+> Run the clone with `$ErrorActionPreference = 'Continue'` for that command, or check `$LASTEXITCODE`
+> (0 = success) instead of relying on stderr.
 
 `requirements.lock.txt` is a cross-platform lock (Linux, macOS, Windows; Python ≥ 3.11) generated with
 `uv pip compile requirements.txt --universal --python-version 3.11 --generate-hashes`.
@@ -110,7 +119,7 @@ With uvx instead of a venv:
   "mcpServers": {
     "grokipedia": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.0", "grokipedia-mcp-server"]
+      "args": ["--from", "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.1", "grokipedia-mcp-server"]
     }
   }
 }
@@ -156,4 +165,4 @@ and hardened (redirect host checks, slug encoding, error-page handling, truncati
 
 ## License
 
-[MIT](LICENSE) © 2026 Mark Fladd
+[MIT](LICENSE) © 2026 Voidwalker Mark

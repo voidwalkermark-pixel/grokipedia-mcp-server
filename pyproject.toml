@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grokipedia-mcp-server"
-version = "0.1.0"
+version = "0.1.1"
 description = "Unofficial read-only MCP server for Grokipedia"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "Mark Fladd" }]
+authors = [{ name = "Voidwalker Mark" }]
 requires-python = ">=3.11"
 keywords = ["mcp", "model-context-protocol", "grokipedia", "mcp-server"]
 classifiers = [

@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [0.1.1] - 2026-10-18
+
+### Changed
+- Metadata: author name updated (LICENSE, `pyproject.toml`, README).
+- README: Windows install notes (harmless `git clone --branch` tag warning on Git 2.55 under
+  PowerShell `$ErrorActionPreference = 'Stop'`; using `python` where the `py` launcher is not installed).
+- No code changes.
+
 ## [0.1.0] - 2026-10-18
 
 Initial public release.
@@ -26,4 +34,5 @@ Initial public release.
 - Proxy/netrc environment variables ignored; tools annotated read-only.
 - Dependencies pinned with a hash lock; lxml 6.1.3 (fixes CVE-2026-41066).
 
+[0.1.1]: https://github.com/voidwalkermark-pixel/grokipedia-mcp-server/releases/tag/v0.1.1
 [0.1.0]: https://github.com/voidwalkermark-pixel/grokipedia-mcp-server/releases/tag/v0.1.0
