@@ -278,3 +278,151 @@ def test_rate_limiter_spacing():
 
 def test_version_reported():
     assert server.mcp._mcp_server.version == __version__
+
+
+# --- v0.1.2: subsections, citation sections, summary title -------------------
+
+NESTED = (
+    "# Printed circuit board\n\nA PCB is a board.[](https://ex.org/1)\n\n"
+    "## History\n\n"
+    "### Precursors\n\nHanson patented foil in 1903.[](https://ex.org/2)[](https://ex.org/1)\n\n"
+    "#### Detail\n\nDeep detail.\n\n"
+    "### Modern PCBs\n\nEisler built one in 1936.[](https://ex.org/3)\n\n"
+    "## Applications\n\n### Consumer\n\nPhones.[](https://ex.org/2)\n\n"
+    "## Design\n\nOwn text.\n\n### Layout\n\nLayout text.\n"
+)
+NESTED_PAGE = {
+    "slug": "Printed_circuit_board",
+    "title": "Printed circuit board",
+    "content": NESTED,
+    "description": "Printed circuit board\n\nA PCB is a board.",
+    # API ids are not reliable: out of order / empty
+    "citations": [
+        {"id": "1", "title": "One", "url": "https://ex.org/1"},
+        {"id": "9", "title": "Two", "url": "https://ex.org/2"},
+        {"id": "", "title": "", "url": "https://ex.org/3"},
+        {"id": "4", "title": "Never cited", "url": "https://ex.org/4"},
+    ],
+}
+
+
+def nested_api(request):
+    if request.url.path == "/api/page-preview":
+        return httpx.Response(200, json={"found": True, "page": NESTED_PAGE})
+    return httpx.Response(404, text=STUB_404)
+
+
+def test_section_empty_parent_includes_subsections(mock_origin):
+    mock_origin(nested_api)
+    res = run(server.get_page_section("Printed_circuit_board", "History"))
+    assert res["includes_subsections"] is True and res["truncated"] is False
+    assert res["subsections"] == [
+        {"heading": "Precursors", "level": 3},
+        {"heading": "Detail", "level": 4},
+        {"heading": "Modern PCBs", "level": 3},
+    ]
+    c = res["content"]
+    assert c.startswith("### Precursors\n\nHanson patented foil in 1903.")
+    assert "#### Detail\n\nDeep detail." in c and "### Modern PCBs\n\nEisler built one in 1936." in c
+    assert "Phones" not in c and "Applications" not in c  # stops at the next level-2 heading
+
+
+def test_section_include_subsections_false_and_nonempty_parent(mock_origin):
+    mock_origin(nested_api)
+    res = run(server.get_page_section("Printed_circuit_board", "Applications", include_subsections=False))
+    assert res["content"] == "" and res["includes_subsections"] is False
+    assert res["subsections"] == [{"heading": "Consumer", "level": 3}]
+    own = run(server.get_page_section("Printed_circuit_board", "Design"))
+    assert own["content"] == "Own text." and own["includes_subsections"] is False
+    assert own["subsections"] == [{"heading": "Layout", "level": 3}]
+    leaf = run(server.get_page_section("Printed_circuit_board", "Modern PCBs"))
+    assert leaf["subsections"] == [] and leaf["includes_subsections"] is False
+
+
+def test_section_subsections_respect_cap(mock_origin):
+    big = "# T\n\n## History\n\n### A\n\n" + ("word " * 10_000) + "\n\n### B\n\nmore\n"
+
+    def handler(r):
+        return httpx.Response(200, json={"found": True, "page": {"slug": "T", "title": "T", "content": big}})
+
+    mock_origin(handler)
+    res = run(server.get_page_section("T", "History"))
+    assert res["truncated"] is True and len(res["content"]) == server.MAX_CONTENT_CHARS
+    assert [s["heading"] for s in res["subsections"]] == ["A", "B"]
+
+
+def test_citation_sections_from_inline_markers(mock_origin):
+    mock_origin(nested_api)
+    res = run(server.get_page_citations("Printed_circuit_board"))
+    assert res["section_mapping"] == "inline_markers" and res["count"] == 4
+    by_num = {c["number"]: c for c in res["citations"]}
+    assert list(by_num) == ["1", "2", "3", "4"]  # list position, not the API id
+    assert by_num["1"]["sections"] == ["Printed circuit board", "Precursors"]
+    assert by_num["2"]["sections"] == ["Precursors", "Consumer"]
+    assert by_num["3"]["sections"] == ["Modern PCBs"]
+    assert by_num["4"]["sections"] == []  # in the list but never cited inline
+    assert "contexts" not in by_num["1"]
+
+
+def test_citation_contexts(mock_origin):
+    mock_origin(nested_api)
+    res = run(server.get_page_citations("Printed_circuit_board", include_context=True))
+    c2 = res["citations"][1]
+    assert c2["contexts"] == [
+        {"section": "Precursors", "text": "Hanson patented foil in 1903."},
+        {"section": "Consumer", "text": "Phones."},
+    ]
+    assert res["citations"][3]["contexts"] == []
+
+
+def test_citation_sections_unavailable_without_markers(mock_origin):
+    page = {**NESTED_PAGE, "content": "# X\n\nNo markers here.\n\n## Y\n\nStill none [1].\n"}
+    mock_origin(lambda r: httpx.Response(200, json={"found": True, "page": page}))
+    res = run(server.get_page_citations("X"))
+    assert res["section_mapping"] == "unavailable"
+    assert all(c["sections"] is None for c in res["citations"])
+
+
+def test_citation_sections_unavailable_on_html_fallback(mock_origin):
+    html = (
+        "<html><body><main><h1>Thing</h1><h2>History</h2><p>Text <sup><a href='#ref-1'>[1]</a></sup></p>"
+        "<a href='https://ex.org/1'>Src</a></main></body></html>"
+    )
+
+    def handler(r):
+        if r.url.path == "/api/page-preview":
+            return httpx.Response(200, json={"found": False, "page": None})
+        return httpx.Response(200, text=html)
+
+    mock_origin(handler)
+    res = run(server.get_page_citations("Thing"))
+    assert res["section_mapping"] == "unavailable" and res["count"] >= 1
+    assert all(c["sections"] is None for c in res["citations"])
+
+
+def test_get_page_does_not_leak_raw_content(mock_origin):
+    mock_origin(nested_api)
+    res = run(server.get_page("Printed_circuit_board"))
+    assert "_content" not in res
+    assert [c["number"] for c in res["citations"]] == ["1", "2", "3", "4"]
+
+
+def test_summary_strips_leading_title(mock_origin):
+    mock_origin(nested_api)
+    res = run(server.get_page("Printed_circuit_board"))
+    assert res["summary"] == "A PCB is a board."
+
+
+@pytest.mark.parametrize(
+    "summary,title,expected",
+    [
+        ("Printed circuit board\n\nA PCB is...", "Printed circuit board", "A PCB is..."),
+        ("# Printed Circuit Board\nA PCB is...", "printed circuit board", "A PCB is..."),
+        ("Python is a language.", "Python", "Python is a language."),  # sentence, not a title line
+        ("Python\nis a language.", "Pythons", "Python\nis a language."),
+        ("Python", "Python", "Python"),  # nothing after it: keep
+        ("", "Python", ""),
+    ],
+)
+def test_strip_leading_title(summary, title, expected):
+    assert server.strip_leading_title(summary, title) == expected

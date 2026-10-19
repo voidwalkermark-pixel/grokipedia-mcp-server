@@ -236,6 +236,112 @@ def _summary_from_content(content: str, max_len: int = 600) -> str:
     return s
 
 
+def strip_leading_title(summary: str, title: str) -> str:
+    """Drop a leading line that just repeats the page title (e.g. "Title\n\nText...").
+
+    Only a whole first line (optionally a markdown heading) equal to the title is removed, so
+    a sentence that merely starts with the title word ("Python is ...") is left untouched.
+    """
+    if not summary or not title:
+        return summary
+    lines = summary.lstrip().split("\n", 1)
+    first = re.sub(r"^#{1,6}\s+", "", lines[0]).strip()
+    if len(lines) == 2 and first.casefold() == title.strip().casefold() and lines[1].strip():
+        return lines[1].strip()
+    return summary
+
+
+def section_with_subsections(sections: list[Any], sec: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    """Return (combined content, descendant headings) for a section in a flat heading list.
+
+    Descendants are the following sections with a deeper level, up to the next heading of the
+    same or a higher level. Combined content is the section's own text followed by each
+    descendant as "<#...> heading" + text.
+    """
+    secs = [s for s in sections if isinstance(s, dict)]
+    try:
+        idx = next(i for i, s in enumerate(secs) if s is sec)
+    except StopIteration:
+        return sec.get("content") or "", []
+    level = sec.get("level") or 0
+    children: list[dict[str, Any]] = []
+    for s in secs[idx + 1 :]:
+        lv = s.get("level") or 0
+        if not isinstance(lv, int) or not isinstance(level, int) or lv <= level:
+            break
+        children.append(s)
+    parts = [sec.get("content") or ""] if (sec.get("content") or "") else []
+    for ch in children:
+        lv = ch.get("level") if isinstance(ch.get("level"), int) else level + 1
+        block = f"{'#' * max(1, min(lv, 6))} {ch.get('heading') or ''}".rstrip()
+        if ch.get("content"):
+            block += "\n\n" + ch["content"]
+        parts.append(block)
+    return "\n\n".join(parts), [{"heading": ch.get("heading"), "level": ch.get("level")} for ch in children]
+
+
+# Inline citation markers in the API markdown are empty-text links to the source URL, e.g.
+# "...wiring.[](https://example.org/src)". A numbered link "[3](https://...)" is accepted too.
+_CITE_MARKER = re.compile(r"\[(\d*)\]\((https?://[^\s)]+)\)")
+_HEADING = re.compile(r"^(#{1,6})\s+(.+)$")
+CONTEXT_CHARS = 160
+
+
+def _plain(text: str) -> str:
+    """Markdown-ish text -> plain text for context snippets."""
+    text = _CITE_MARKER.sub("", text)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    return _clean_text(text.replace("**", "").replace("__", ""))
+
+
+def map_citation_sections(
+    citations: list[dict[str, Any]], content: str | None, with_context: bool = False
+) -> tuple[list[dict[str, Any]], str]:
+    """Attach the headings under which each citation is referenced in the article text.
+
+    Mapping is by exact URL match between inline markers and the citation list; nothing is
+    inferred. Returns (citations, mode) where mode is "inline_markers" when at least one marker
+    matched a citation (each citation then gets "sections": [...], possibly empty), or
+    "unavailable" (each citation gets "sections": None).
+    """
+    by_url: dict[str, int] = {}
+    for i, c in enumerate(citations):
+        u = c.get("url") or ""
+        if u and u not in by_url:
+            by_url[u] = i
+    hits: dict[int, list[str]] = {}
+    ctx: dict[int, list[dict[str, str]]] = {}
+    matched = False
+    heading: str | None = None
+    for line in (content or "").splitlines():
+        m = _HEADING.match(line.strip())
+        if m:
+            heading = m.group(2).strip()
+            continue
+        for mk in _CITE_MARKER.finditer(line):
+            i = by_url.get(mk.group(2))
+            if i is None:
+                continue
+            matched = True
+            if heading is not None and heading not in hits.setdefault(i, []):
+                hits[i].append(heading)
+            if with_context:
+                before = _plain(line[: mk.start()])
+                snippet = before[-CONTEXT_CHARS:]
+                if len(before) > CONTEXT_CHARS:
+                    snippet = "…" + snippet.split(" ", 1)[-1]
+                lst = ctx.setdefault(i, [])
+                if len(lst) < 3:
+                    lst.append({"section": heading, "text": snippet})
+    out = []
+    for i, c in enumerate(citations):
+        c = {**c, "sections": hits.get(i, []) if matched else None}
+        if with_context:
+            c["contexts"] = ctx.get(i, []) if matched else None
+        out.append(c)
+    return out, ("inline_markers" if matched else "unavailable")
+
+
 def _not_found(slug: str, title: str | None = None, summary: str = "Article not found.") -> dict[str, Any]:
     return {
         "title": title or slug.replace("_", " "),
@@ -297,7 +403,18 @@ def parse_html_page(html: str, slug: str) -> dict[str, Any]:
 
 
 async def fetch_page_data(slug: str) -> dict[str, Any]:
-    """Prefer /api/page-preview; fall back to parsing the public HTML page."""
+    """Public page shape (without the internal raw-content field)."""
+    page = await fetch_page_raw(slug)
+    page.pop("_content", None)
+    return page
+
+
+async def fetch_page_raw(slug: str) -> dict[str, Any]:
+    """Prefer /api/page-preview; fall back to parsing the public HTML page.
+
+    On the API path the result carries the raw markdown under "_content" (internal; stripped
+    by fetch_page_data) so citation markers can be located in the article text.
+    """
     slug = (slug or "").strip().replace(" ", "_")
     if not slug:
         raise ValueError("slug required")
@@ -308,17 +425,24 @@ async def fetch_page_data(slug: str) -> dict[str, Any]:
         if data.get("found") and isinstance(data.get("page"), dict):
             page = data["page"]
             content = page.get("content") or page.get("content_text") or ""
-            citations = page.get("citations") or _extract_citations_from_markdown(content)
+            api_citations = page.get("citations")
             norm = []
-            for c in citations:
-                if isinstance(c, dict):
-                    norm.append({
-                        "number": c.get("number") or c.get("id"),
-                        "url": c.get("url") or c.get("href") or "",
-                        "title": c.get("title") or "",
-                    })
-                elif isinstance(c, str):
-                    norm.append({"number": None, "url": c, "title": ""})
+            if isinstance(api_citations, list) and api_citations:
+                # The site numbers references by their 1-based position in this list (the
+                # rendered "[n]" markers link to "#ref-n"). The API's own "id" field is not
+                # reliable (sometimes out of order or empty), so it is not used as the number.
+                for i, c in enumerate(api_citations, 1):
+                    if isinstance(c, dict):
+                        norm.append({
+                            "number": str(i),
+                            "url": c.get("url") or c.get("href") or "",
+                            "title": c.get("title") or "",
+                        })
+                    elif isinstance(c, str):
+                        norm.append({"number": str(i), "url": c, "title": ""})
+            else:
+                for c in _extract_citations_from_markdown(content):
+                    norm.append({"number": c.get("number"), "url": c.get("url") or "", "title": ""})
             sections = page.get("sections")
             if not isinstance(sections, list) or not all(isinstance(s, dict) for s in sections):
                 sections = _extract_sections(content)
@@ -326,11 +450,15 @@ async def fetch_page_data(slug: str) -> dict[str, Any]:
                 "title": page.get("title") or slug.replace("_", " "),
                 "slug": page.get("slug") or slug,
                 "url": _slug_url(page.get("slug") or slug),
-                "summary": page.get("description") or page.get("summary") or _summary_from_content(content),
+                "summary": strip_leading_title(
+                    page.get("description") or page.get("summary") or _summary_from_content(content),
+                    page.get("title") or slug.replace("_", " "),
+                ),
                 "sections": sections,
                 "citations": norm,
                 "found": True,
                 "source": "api",
+                "_content": content,
             }
     except Exception:
         pass  # API unavailable / not found: fall through to HTML
@@ -449,8 +577,16 @@ async def get_page(slug: str) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def get_page_section(slug: str, heading: str) -> dict[str, Any]:
-    """Return one section by heading (exact case-insensitive match, else heading containing the text)."""
+async def get_page_section(slug: str, heading: str, include_subsections: bool = True) -> dict[str, Any]:
+    """Return one section by heading (exact case-insensitive match, else heading containing the text).
+
+    Args:
+        slug: Page slug, e.g. "Printed_circuit_board".
+        heading: Section heading to find.
+        include_subsections: If the section's own body is empty (a parent heading whose text
+            lives in its subsections), return the subsections' text with their headings
+            (default true). "subsections" always lists the nested headings.
+    """
     if not heading or not heading.strip():
         return {"error": "heading required", "slug": slug}
     try:
@@ -458,9 +594,13 @@ async def get_page_section(slug: str, heading: str) -> dict[str, Any]:
         if not page.get("found", True) and not page.get("sections"):
             return {"error": page.get("summary") or "page not available", "slug": slug, "found": False}
 
-        sec = match_section(page.get("sections") or [], heading)
+        sections = page.get("sections") or []
+        sec = match_section(sections, heading)
         if sec is not None:
-            content = sec.get("content") or ""
+            own = sec.get("content") or ""
+            combined, subsections = section_with_subsections(sections, sec)
+            use_children = bool(include_subsections and not own.strip() and subsections)
+            content = combined if use_children else own
             return {
                 "slug": page.get("slug"),
                 "title": page.get("title"),
@@ -468,11 +608,13 @@ async def get_page_section(slug: str, heading: str) -> dict[str, Any]:
                 "level": sec.get("level"),
                 "content": content[:MAX_CONTENT_CHARS],
                 "truncated": len(content) > MAX_CONTENT_CHARS,
+                "includes_subsections": use_children,
+                "subsections": subsections,
                 "url": page.get("url"),
             }
         return {
             "error": f"section not found: {heading}",
-            "available_headings": [s.get("heading") for s in page.get("sections") or [] if isinstance(s, dict)],
+            "available_headings": [s.get("heading") for s in sections if isinstance(s, dict)],
             "slug": slug,
         }
     except asyncio.TimeoutError:
@@ -482,11 +624,21 @@ async def get_page_section(slug: str, heading: str) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def get_page_citations(slug: str) -> dict[str, Any]:
-    """Return the citations / references for a page."""
+async def get_page_citations(slug: str, include_context: bool = False) -> dict[str, Any]:
+    """Return the citations / references for a page, with where each is cited.
+
+    Each citation has "sections": the headings under which its inline marker appears in the
+    article text (matched by exact URL; [] if never cited inline). When the article text has
+    no usable inline markers (e.g. HTML fallback), "sections" is null and "section_mapping" is
+    "unavailable"; mappings are never guessed.
+
+    Args:
+        slug: Page slug.
+        include_context: Also return up to 3 short text snippets preceding each marker.
+    """
     try:
-        page = await asyncio.wait_for(fetch_page_data(slug), TOOL_DEADLINE)
-        cites = page.get("citations") or []
+        page = await asyncio.wait_for(fetch_page_raw(slug), TOOL_DEADLINE)
+        cites, mode = map_citation_sections(page.get("citations") or [], page.get("_content"), include_context)
         return {
             "found": page.get("found", True),
             "slug": page.get("slug"),
@@ -494,6 +646,7 @@ async def get_page_citations(slug: str) -> dict[str, Any]:
             "url": page.get("url"),
             "citations": cites,
             "count": len(cites),
+            "section_mapping": mode,
         }
     except asyncio.TimeoutError:
         return {"error": f"timed out after {TOOL_DEADLINE:.0f}s", "slug": slug}

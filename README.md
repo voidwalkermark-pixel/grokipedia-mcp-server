@@ -13,8 +13,24 @@ Grok-compatible agents, etc.) search Grokipedia and read articles, sections and 
 |---|---|---|
 | `search` | `query` (str), `limit` (1–50, default 10), `offset` (default 0) | `{query, limit, offset, count, results: [{slug, title, snippet, relevance, url}]}` |
 | `get_page` | `slug` (str; spaces become `_`) | `{title, slug, url, summary, sections: [{heading, level, content}], citations: [{number, url, title}], found, source, truncated?}` |
-| `get_page_section` | `slug`, `heading` | `{slug, title, heading, level, content, truncated, url}` (exact case-insensitive heading match first, then a heading containing the text) |
-| `get_page_citations` | `slug` | `{found, slug, title, url, citations, count}` |
+| `get_page_section` | `slug`, `heading`, `include_subsections` (default `true`) | `{slug, title, heading, level, content, truncated, includes_subsections, subsections: [{heading, level}], url}` (exact case-insensitive heading match first, then a heading containing the text) |
+| `get_page_citations` | `slug`, `include_context` (default `false`) | `{found, slug, title, url, citations: [{number, url, title, sections, contexts?}], count, section_mapping}` |
+
+**Sections with subsections.** Many articles have level-2 headings (e.g. "History") whose text lives
+entirely in level-3 subsections. When the matched section's own body is empty and
+`include_subsections` is true, `get_page_section` returns the subsections' text, each preceded by its
+markdown heading (`### Precursors and early inventions` ...), still capped at 20,000 characters
+(`truncated`). `subsections` always lists the nested headings, so you can also request one directly.
+
+**Where citations are used.** In the article markdown served by `/api/page-preview`, each inline
+citation is an empty-text link to the source URL, e.g. `...telephony equipment.[](https://example.org/src)`
+(the website renders these as `[n]` superscripts). `get_page_citations` matches those markers to the
+reference list **by exact URL** and gives each citation `sections`: the headings it is cited under
+(`[]` if it is never cited inline). With `include_context: true` it also returns up to 3 short
+snippets of the text preceding the marker. `number` is the reference's 1-based position in the list,
+which is the number the website shows. If the page has no usable inline markers (for example when
+only the HTML fallback is available), `section_mapping` is `"unavailable"` and every `sections` is
+`null`; mappings are never guessed.
 
 All tools are annotated read-only. Failures come back as a normal result with an `"error"` key
 (for example `{"error": "origin error (502)"}`); a page that doesn't exist returns `"found": false`.
@@ -28,13 +44,13 @@ Requires **Python 3.11–3.13**. The server is installed straight from this GitH
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run it without a manual install:
 
 ```bash
-uvx --from git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.1 grokipedia-mcp-server --version
+uvx --from git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.2 grokipedia-mcp-server --version
 ```
 
 Or install it as a persistent tool (puts `grokipedia-mcp-server` on your PATH):
 
 ```bash
-uv tool install git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.1
+uv tool install git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.2
 ```
 
 ### Option B: pip in a virtual environment
@@ -43,7 +59,7 @@ uv tool install git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-serve
 
 ```bash
 python3 -m venv ~/.venvs/grokipedia-mcp
-~/.venvs/grokipedia-mcp/bin/pip install "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.1"
+~/.venvs/grokipedia-mcp/bin/pip install "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.2"
 ~/.venvs/grokipedia-mcp/bin/grokipedia-mcp-server --version
 ```
 
@@ -51,7 +67,7 @@ python3 -m venv ~/.venvs/grokipedia-mcp
 
 ```powershell
 py -3.13 -m venv "$env:USERPROFILE\.venvs\grokipedia-mcp"
-& "$env:USERPROFILE\.venvs\grokipedia-mcp\Scripts\pip.exe" install "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.1"
+& "$env:USERPROFILE\.venvs\grokipedia-mcp\Scripts\pip.exe" install "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.2"
 & "$env:USERPROFILE\.venvs\grokipedia-mcp\Scripts\grokipedia-mcp-server.exe" --version
 ```
 
@@ -59,12 +75,12 @@ If the `py` launcher isn't installed, use `python -m venv ...` instead (check `p
 
 `pip install git+...` needs [Git](https://git-scm.com/download/win) on PATH. Without Git, install from
 the release archive instead:
-`pip install https://github.com/voidwalkermark-pixel/grokipedia-mcp-server/archive/refs/tags/v0.1.1.zip`
+`pip install https://github.com/voidwalkermark-pixel/grokipedia-mcp-server/archive/refs/tags/v0.1.2.zip`
 
 ### Option C: reproducible install with hash-pinned dependencies
 
 ```bash
-git clone --branch v0.1.1 https://github.com/voidwalkermark-pixel/grokipedia-mcp-server
+git clone --branch v0.1.2 https://github.com/voidwalkermark-pixel/grokipedia-mcp-server
 cd grokipedia-mcp-server
 python -m venv .venv
 # Linux/macOS: .venv/bin/python   Windows: .venv\Scripts\python.exe
@@ -119,7 +135,7 @@ With uvx instead of a venv:
   "mcpServers": {
     "grokipedia": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.1", "grokipedia-mcp-server"]
+      "args": ["--from", "git+https://github.com/voidwalkermark-pixel/grokipedia-mcp-server@v0.1.2", "grokipedia-mcp-server"]
     }
   }
 }

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grokipedia-mcp-server"
-version = "0.1.1"
+version = "0.1.2"
 description = "Unofficial read-only MCP server for Grokipedia"
 readme = "README.md"
 license = "MIT"
